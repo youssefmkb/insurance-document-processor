@@ -1,0 +1,626 @@
+{
+  "name": "Insurance Document Processor",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        -2608,
+        -176
+      ],
+      "id": "c21806d7-474a-4f6a-90b3-6d29a8380a09",
+      "name": "Error Trigger"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "process-claim",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -2608,
+        -560
+      ],
+      "id": "11c5b0d6-ebc4-481e-9464-a375e7149f12",
+      "name": "Receive Document",
+      "webhookId": "395a8b7e-d82d-4d61-a917-5758aa6c109e"
+    },
+    {
+      "parameters": {
+        "jsCode": "const binaryKey = Object.keys($input.first().binary)[0];\nconst buffer = await this.helpers.getBinaryDataBuffer(0, binaryKey);\nconst base64 = buffer.toString('base64');\nconst mimeType = $input.first().binary[binaryKey].mimeType;\n\nreturn [{\n  json: {\n    base64_data: base64,\n    mime_type: mimeType\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2400,
+        -560
+      ],
+      "id": "f965b65a-f260-4c9e-aa51-d658d60d0857",
+      "name": "Extract Base64"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"claude-haiku-4-5-20251001\",\n  \"max_tokens\": 4096,\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": [\n        {\n          \"type\": \"document\",\n          \"source\": {\n            \"type\": \"base64\",\n            \"media_type\": \"{{ $json.mime_type }}\",\n            \"data\": \"{{ $json.base64_data }}\"\n          }\n        },\n        {\n          \"type\": \"text\",\n          \"text\": \"You are an expert insurance claims analyst specializing in French automobile accident reports. Analyze this Constat Amiable and extract all data into a structured JSON. Respond ONLY with valid JSON, no markdown, no backticks. Use this schema: {accident: {date, time, location: {country, city, street}}, injuries: {declared: bool, details}, vehicle_a: {driver: {last_name, first_name, address, phone, license_number, license_date}, insurance: {company, policy_number, green_card_number, validity_period}, vehicle: {make_model, plate_number}, damages, signature_present: bool}, vehicle_b: {same structure as vehicle_a}, circumstances: {vehicle_a: [list], vehicle_b: [list]}, completeness: {is_complete: bool, missing_fields: [list]}, classification: {severity: minor|moderate|severe, has_injuries: bool, route: AUTO_PROCESS|REVIEW_NEEDED|URGENT_ESCALATION, route_reason: string}}. Rules: null for missing fields. URGENT_ESCALATION if injuries. REVIEW_NEEDED if incomplete. AUTO_PROCESS if complete and no injuries. Preserve original French text in values.\"\n        }\n      ]\n    }\n  ]\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -2192,
+        -560
+      ],
+      "id": "b8cc2586-1ab6-4391-8614-db19bc4eb78c",
+      "name": "Claude Vision API",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "aSEbXGHAizWeZzna",
+          "name": "Header Auth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.first().json;\nconst text = response.content[0].text;\n\n// Clean potential markdown backticks\nconst clean = text.replace(/```json\\n?/g, '').replace(/```\\n?/g, '').trim();\nconst parsed = JSON.parse(clean);\n\nreturn [{\n  json: parsed\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1984,
+        -560
+      ],
+      "id": "17ebb853-f00b-4cc2-af29-44086dc74c4c",
+      "name": "Parse Extraction"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "leftValue": "=AUTO_PROCESS",
+                    "rightValue": "={{ $json.classification.route }}",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "5fd707e9-cccb-44b0-9966-6e9e73c48588"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Auto Process"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "e1f7f0f4-aae1-430e-8f33-6409dd48045c",
+                    "leftValue": "REVIEW_NEEDED",
+                    "rightValue": "={{ $json.classification.route }}",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Review Needed"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "baf89fc6-c2ed-4657-9c2c-493b73ac3795",
+                    "leftValue": "URGENT_ESCALATION",
+                    "rightValue": "={{ $json.classification.route }}",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Urgent Escalation"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        -1776,
+        -560
+      ],
+      "id": "7b7c7029-8cfe-4c4d-8e43-e0186cafacc4",
+      "name": "Route by Severity"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1GNW5EuQXslUuUPkbp5KdZF4kJhUWPaaHH63OJIIlFtg",
+          "mode": "list",
+          "cachedResultName": "Insurance Claims Dashboard",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1GNW5EuQXslUuUPkbp5KdZF4kJhUWPaaHH63OJIIlFtg/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Claims",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1GNW5EuQXslUuUPkbp5KdZF4kJhUWPaaHH63OJIIlFtg/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Date": "={{ $json.accident.date }}",
+            "Heure": "={{ $json.accident.time }}",
+            "Ville": "={{ $json.accident.location.city }}",
+            "Rue": "={{ $json.accident.location.street }}",
+            "Conducteur A": "={{ $json.vehicle_a.driver.last_name }} {{ $json.vehicle_a.driver.first_name }}",
+            "Conducteur B": "={{ $json.vehicle_b.driver.last_name }} {{ $json.vehicle_b.driver.first_name }}",
+            "Assureur A": "={{ $json.vehicle_a.insurance.company }}",
+            "Assureur B": "={{ $json.vehicle_b.insurance.company }}",
+            "Plaque A": "={{ $json.vehicle_a.vehicle.plate_number }}",
+            "Plaque B": "={{ $json.vehicle_b.vehicle.plate_number }}",
+            "Dégâts A": "={{ $json.vehicle_a.damages }}",
+            "Dégâts B": "={{ $json.vehicle_b.damages }}",
+            "Blessés": "={{ $json.injuries.declared }}",
+            "Sévérité": "={{ $json.classification.severity }}",
+            "Route": "={{ $json.classification.route }}",
+            "Raison": "={{ $json.classification.route_reason }}",
+            "Timestamp": "={{ new Date().toISOString() }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Date",
+              "displayName": "Date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Heure",
+              "displayName": "Heure",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Ville",
+              "displayName": "Ville",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Rue",
+              "displayName": "Rue",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Conducteur A",
+              "displayName": "Conducteur A",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Conducteur B",
+              "displayName": "Conducteur B",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Assureur A",
+              "displayName": "Assureur A",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Assureur B",
+              "displayName": "Assureur B",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Plaque A",
+              "displayName": "Plaque A",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Plaque B",
+              "displayName": "Plaque B",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Dégâts A",
+              "displayName": "Dégâts A",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Dégâts B",
+              "displayName": "Dégâts B",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Blessés",
+              "displayName": "Blessés",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Sévérité",
+              "displayName": "Sévérité",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Route",
+              "displayName": "Route",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Raison",
+              "displayName": "Raison",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Timestamp",
+              "displayName": "Timestamp",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        -1120,
+        -576
+      ],
+      "id": "53c983c6-90db-4e3a-b93a-f4bef2283cca",
+      "name": "Log to Dashboard",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "6k9nfOCGEAH5qZbH",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "your-email@gmail.com",
+        "subject": "=🚨 ESCALADE — Sinistre avec blessés — {{ $json.accident.location.city }}",
+        "message": "=<h2 style=\"color: #c0392b;\">🚨 ALERTE — Sinistre avec blessés</h2>\n\n<table style=\"border-collapse: collapse; width: 100%;\">\n  <tr><td style=\"padding: 8px; font-weight: bold; width: 140px;\">Date</td><td style=\"padding: 8px;\">{{ $json.accident.date }} à {{ $json.accident.time }}</td></tr>\n  <tr style=\"background: #f9f9f9;\"><td style=\"padding: 8px; font-weight: bold;\">Lieu</td><td style=\"padding: 8px;\">{{ $json.accident.location.city }} — {{ $json.accident.location.street }}</td></tr>\n  <tr><td style=\"padding: 8px; font-weight: bold;\">Conducteur A</td><td style=\"padding: 8px;\">{{ $json.vehicle_a.driver.last_name }} {{ $json.vehicle_a.driver.first_name }}</td></tr>\n  <tr style=\"background: #f9f9f9;\"><td style=\"padding: 8px; font-weight: bold;\">Conducteur B</td><td style=\"padding: 8px;\">{{ $json.vehicle_b.driver.last_name }} {{ $json.vehicle_b.driver.first_name }}</td></tr>\n  <tr><td style=\"padding: 8px; font-weight: bold;\">Blessures</td><td style=\"padding: 8px; color: #c0392b;\">{{ $json.injuries.details }}</td></tr>\n  <tr style=\"background: #f9f9f9;\"><td style=\"padding: 8px; font-weight: bold;\">Sévérité</td><td style=\"padding: 8px;\">{{ $json.classification.severity }}</td></tr>\n  <tr><td style=\"padding: 8px; font-weight: bold;\">Dégâts A</td><td style=\"padding: 8px;\">{{ $json.vehicle_a.damages }}</td></tr>\n  <tr style=\"background: #f9f9f9;\"><td style=\"padding: 8px; font-weight: bold;\">Dégâts B</td><td style=\"padding: 8px;\">{{ $json.vehicle_b.damages }}</td></tr>\n</table>\n\n<hr>\n<p style=\"color: #c0392b; font-weight: bold;\">⚠️ Ce sinistre nécessite une prise en charge immédiate par un gestionnaire.</p>\n<p style=\"color: #888; font-size: 12px;\">Email généré automatiquement par Insurance Document Processor — n8n workflow</p>",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        -1440,
+        -368
+      ],
+      "id": "e1b7d3a3-be83-455e-a0a6-f566f1172e10",
+      "name": "Send Escalation Email",
+      "webhookId": "0279986e-7660-4136-820a-899b027715bd",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "15fQIknZaXQStMRl",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1GNW5EuQXslUuUPkbp5KdZF4kJhUWPaaHH63OJIIlFtg",
+          "mode": "list",
+          "cachedResultName": "Insurance Claims Dashboard",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1GNW5EuQXslUuUPkbp5KdZF4kJhUWPaaHH63OJIIlFtg/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 1117827669,
+          "mode": "list",
+          "cachedResultName": "Errors",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1GNW5EuQXslUuUPkbp5KdZF4kJhUWPaaHH63OJIIlFtg/edit#gid=1117827669"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Timestamp": "={{ new Date().toISOString() }}",
+            "Node": "={{ $json.execution.error.node.name }}",
+            "Error Message": "={{ $json.execution.error.message }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Timestamp",
+              "displayName": "Timestamp",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Node",
+              "displayName": "Node",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Error Message",
+              "displayName": "Error Message",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        -2400,
+        -176
+      ],
+      "id": "96212877-d314-493d-978f-62f0cc388d6c",
+      "name": "Log Error",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "6k9nfOCGEAH5qZbH",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## Insurance Document Processor",
+        "height": 608,
+        "width": 1856,
+        "color": "#00202E"
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -2704,
+        -608
+      ],
+      "id": "aeeb59c7-aa60-448b-a0ae-102be8cc922f",
+      "name": "Sticky Note"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Log Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Receive Document": {
+      "main": [
+        [
+          {
+            "node": "Extract Base64",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Base64": {
+      "main": [
+        [
+          {
+            "node": "Claude Vision API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude Vision API": {
+      "main": [
+        [
+          {
+            "node": "Parse Extraction",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Extraction": {
+      "main": [
+        [
+          {
+            "node": "Route by Severity",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route by Severity": {
+      "main": [
+        [
+          {
+            "node": "Log to Dashboard",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log to Dashboard",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Escalation Email",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Log to Dashboard",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log to Dashboard": {
+      "main": [
+        []
+      ]
+    },
+    "Send Escalation Email": {
+      "main": [
+        []
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "9f170681-00d5-4233-94aa-fcac416c0e9a",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "cc7869c017250da2738dec45fae38c5bca0719c462b501548dc40d71067ee754"
+  },
+  "id": "OoMKFb5MfYQ0diQK",
+  "tags": []
+}
